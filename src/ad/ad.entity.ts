@@ -112,6 +112,6 @@ export class Ad {
   @JoinColumn({ name: 'userId' })
   user: User;
 
-  @OneToMany(() => AdImage, (adImage) => adImage.ad, { cascade: true })
+  @OneToMany(() => AdImage, (adImage) => adImage.ad)
   images: AdImage[];
 }

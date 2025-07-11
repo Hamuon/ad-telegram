@@ -179,9 +179,12 @@ export class TelegramBotService {
           stream: null as any,
         };
 
-        // آپلود فایل به Filebase
-        await this.s3Service.uploadFile(file, 'ads');
-        session.uploadedFiles.push(file);
+        const fileUrl = await this.s3Service.uploadFile(file);
+        session.uploadedFiles.push({
+          url: fileUrl,
+          originalname: file.originalname,
+          filename: file.filename,
+        });
 
         await ctx.reply(
           `عکس ${session.uploadedFiles.length} دریافت شد. برای ادامه "تمام" را بفرستید یا عکس بیشتری ارسال کنید.`,
@@ -392,12 +395,19 @@ export class TelegramBotService {
         userId: user!.id,
         expirationDate: new Date(
           Date.now() + 30 * 24 * 60 * 60 * 1000,
-        ).toISOString(), // تنظیم پیش‌فرض
+        ).toISOString(),
       };
 
-      await this.adService.create(createAdDto, user!.id, session.uploadedFiles);
+      // Ensure imageUrls is a flat array
+      const imageUrls = session.uploadedFiles.map((file: any) => ({
+        url: file.url,
+        filename: file.filename,
+        originalname: file.originalname,
+      }));
+      console.log('Image URLs sent to AdService.create:', imageUrls); // Debug log
 
-      // تغییر پیام تایید - حذف "پس از تایید ادمین"
+      await this.adService.create(createAdDto, user!.id, imageUrls);
+
       await ctx.reply('✅ آگهی شما با موفقیت ثبت و در کانال منتشر شد!');
 
       this.clearUserSession(ctx.from.id);
@@ -460,9 +470,7 @@ export class TelegramBotService {
     }
 
     try {
-      // روش 1: ارسال پیام با تصاویر به صورت Media Group
       if (ad.images && ad.images.length > 0) {
-        // ایجاد media group برای ارسال چندین تصویر همزمان
         const mediaGroup = ad.images
           .slice(0, 10)
           .map((image: any, index: number) => ({
@@ -471,18 +479,20 @@ export class TelegramBotService {
             caption: index === 0 ? this.formatAdMessage(ad) : undefined,
             parse_mode: 'HTML' as const,
           }));
+        console.log(
+          'Media group URLs sent to Telegram:',
+          mediaGroup.map((item) => item.media),
+        ); // Debug log
 
         const sentMessages = await this.bot.telegram.sendMediaGroup(
           channelId,
           mediaGroup,
         );
 
-        // ذخیره message_id اولین پیام
         if (sentMessages && sentMessages.length > 0) {
           ad.telegramMessageId = sentMessages[0].message_id;
         }
       } else {
-        // اگر تصویری نداشت، فقط پیام متنی ارسال کن
         const message = this.formatAdMessage(ad);
         const sentMessage = await this.bot.telegram.sendMessage(
           channelId,

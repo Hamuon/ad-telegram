@@ -32,7 +32,10 @@ export class AdService {
   async create(
     createAdDto: CreateAdDto,
     userId: number,
-    files?: Express.Multer.File[],
+    filesOrUrls?: Array<
+      | Express.Multer.File
+      | { url: string; filename: string; originalname: string }
+    >,
   ): Promise<Ad> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
@@ -56,19 +59,24 @@ export class AdService {
 
     const expirationDate = createAdDto.expirationDate
       ? new Date(createAdDto.expirationDate)
-      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 روز بعد
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     const ad = this.adRepository.create({
       ...createAdDto,
       user: user,
-      status: AdStatus.APPROVED, // تغییر از PENDING به APPROVED
+      status: AdStatus.APPROVED,
       expirationDate,
     });
 
     const savedAd = await this.adRepository.save(ad);
 
-    if (files && files.length > 0) {
-      await this.uploadAdImages(savedAd.id, files);
+    if (filesOrUrls && filesOrUrls.length > 0) {
+      // Ensure filesOrUrls is a flat array
+      const flatFilesOrUrls = Array.isArray(filesOrUrls[0])
+        ? filesOrUrls.flat()
+        : filesOrUrls;
+      const images = await this.uploadAdImages(savedAd.id, flatFilesOrUrls);
+      savedAd.images = images;
     }
 
     if (!user.isPremium) {
@@ -76,15 +84,12 @@ export class AdService {
       await this.userRepository.save(user);
     }
 
-    // دریافت آگهی کامل با تصاویر برای انتشار
     const completeAd = await this.findOne(savedAd.id);
 
-    // انتشار خودکار در کانال تلگرام
     try {
       await this.telegramBotService.publishAdToChannel(completeAd);
     } catch (error) {
       console.error('Error publishing ad to channel:', error);
-      // در صورت خطا در انتشار، آگهی همچنان تایید شده باقی می‌ماند
     }
 
     return completeAd;
@@ -92,9 +97,12 @@ export class AdService {
 
   async uploadAdImages(
     adId: number,
-    files: Express.Multer.File[],
+    filesOrUrls: Array<
+      | Express.Multer.File
+      | { url: string; filename: string; originalname: string }
+    >,
   ): Promise<AdImage[]> {
-    if (files.length > 5) {
+    if (filesOrUrls.length > 5) {
       throw new BadRequestException('حداکثر 5 عکس مجاز است');
     }
 
@@ -104,16 +112,27 @@ export class AdService {
     }
 
     try {
-      const uploadPromises = files.map(async (file, index) => {
-        const fileUrl = await this.s3Service.uploadFile(file, 'ads');
+      const uploadPromises = filesOrUrls.map(async (item, index) => {
+        let fileUrl: string;
+        let s3Key: string;
+        let filename: string;
 
-        const url = new URL(fileUrl);
-        const s3Key = url.pathname.substring(1);
+        if ('url' in item) {
+          // Handle Telegram-uploaded images with pre-existing URLs
+          fileUrl = item.url;
+          s3Key = new URL(fileUrl).pathname.replace('/ipfs/', '');
+          filename = item.filename;
+        } else {
+          // Handle API-uploaded files
+          fileUrl = await this.s3Service.uploadFile(item);
+          s3Key = new URL(fileUrl).pathname.replace('/ipfs/', '');
+          filename = item.filename;
+        }
 
         const adImage = this.adImageRepository.create({
-          ad, // تنظیم مستقیم موجودیت ad
+          ad,
           url: fileUrl,
-          filename: file.originalname,
+          filename,
           s3Key,
           order: index,
         });
@@ -121,9 +140,11 @@ export class AdService {
         return this.adImageRepository.save(adImage);
       });
 
-      const savedImages = await Promise.all(uploadPromises);
-      return savedImages; // حذف flat()
+      const savedImages = (await Promise.all(uploadPromises)).flat();
+      console.log('Saved images:', savedImages); // Debug log
+      return savedImages;
     } catch (error) {
+      console.error('Error in uploadAdImages:', error);
       throw new BadRequestException('خطا در آپلود تصاویر: ' + error.message);
     }
   }

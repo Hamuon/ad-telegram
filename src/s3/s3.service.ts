@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
-  PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
 } from '@aws-sdk/client-s3';
@@ -14,6 +13,7 @@ export class S3Service {
   private readonly logger = new Logger(S3Service.name);
   private readonly s3Client: S3Client;
   private readonly bucketName: string;
+  private readonly filebaseGateway: string;
 
   constructor(private configService: ConfigService) {
     const region = this.configService.get<string>('AWS_S3_REGION');
@@ -42,18 +42,16 @@ export class S3Service {
         accessKeyId: accessKeyId,
         secretAccessKey: secretAccessKey,
       },
-      endpoint: endpoint, // تنظیم endpoint برای Filebase
+      endpoint: endpoint,
     });
     this.bucketName = bucketName;
+    this.filebaseGateway = 'https://ipfs.filebase.io/ipfs/';
   }
 
-  async uploadFile(
-    file: Express.Multer.File,
-    folder: string = 'ads',
-  ): Promise<string> {
+  async uploadFile(file: Express.Multer.File): Promise<string> {
     try {
       const fileExtension = file.originalname.split('.').pop();
-      const fileName = `${folder}/${uuidv4()}.${fileExtension}`;
+      const fileName = `/${uuidv4()}.${fileExtension}`;
 
       const upload = new Upload({
         client: this.s3Client,
@@ -62,13 +60,16 @@ export class S3Service {
           Key: fileName,
           Body: file.buffer,
           ContentType: file.mimetype,
-          ACL: 'public-read', // دسترسی عمومی برای مشاهده فایل‌ها
+          ACL: 'public-read-write',
         },
       });
 
       const result = await upload.done();
-      // URL فایل در Filebase
-      const fileUrl = `https://${this.bucketName}.filebase.com/${fileName}`;
+      // Log the result to inspect CID
+      this.logger.log('Upload result:', JSON.stringify(result));
+      // Verify with Filebase API docs how CID is returned
+      const cid = result.$metadata.extendedRequestId;
+      const fileUrl = `${this.filebaseGateway}${cid}`;
 
       this.logger.log(`File uploaded successfully: ${fileUrl}`);
       return fileUrl;
@@ -78,15 +79,12 @@ export class S3Service {
     }
   }
 
-  async uploadMultipleFiles(
-    files: Express.Multer.File[],
-    folder: string = 'ads',
-  ): Promise<string[]> {
+  async uploadMultipleFiles(files: Express.Multer.File[]): Promise<string[]> {
     try {
       if (files.length > 5) {
         throw new Error('Maximum 5 files allowed');
       }
-      const uploadPromises = files.map((file) => this.uploadFile(file, folder));
+      const uploadPromises = files.map((file) => this.uploadFile(file));
       const urls = await Promise.all(uploadPromises);
 
       this.logger.log(`${files.length} files uploaded successfully`);
@@ -100,7 +98,7 @@ export class S3Service {
   async deleteFile(fileUrl: string): Promise<void> {
     try {
       const url = new URL(fileUrl);
-      const key = url.pathname.substring(1);
+      const key = url.pathname.replace('/ipfs/', '');
 
       const command = new DeleteObjectCommand({
         Bucket: this.bucketName,
@@ -132,16 +130,7 @@ export class S3Service {
     expiresIn: number = 3600,
   ): Promise<string> {
     try {
-      const url = new URL(fileUrl);
-      const key = url.pathname.substring(1);
-
-      const command = new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-      });
-
-      // فایل‌های Filebase عمومی هستند، بنابراین URL اصلی را برمی‌گردانیم
-      return fileUrl;
+      return fileUrl; // Filebase URLs are public
     } catch (error) {
       this.logger.error('Error generating signed URL:', error);
       throw new Error('Failed to generate signed URL');
@@ -151,7 +140,7 @@ export class S3Service {
   async fileExists(fileUrl: string): Promise<boolean> {
     try {
       const url = new URL(fileUrl);
-      const key = url.pathname.substring(1);
+      const key = url.pathname.replace('/ipfs/', '');
 
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
@@ -172,7 +161,7 @@ export class S3Service {
   async getFileInfo(fileUrl: string): Promise<any> {
     try {
       const url = new URL(fileUrl);
-      const key = url.pathname.substring(1);
+      const key = url.pathname.replace('/ipfs/', '');
 
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
