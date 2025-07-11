@@ -43,7 +43,7 @@ export class TelegramBotService {
 
       const keyboard = {
         keyboard: [
-          [{ text: '📱 اشتراک‌گذاری شماره تلفن', request_contact: true }],
+          [{ text: '📱 اشتراک‌ گذاری شماره تلفن', request_contact: true }],
           [{ text: '📖 راهنما' }, { text: '📞 پشتیبانی' }],
         ],
         resize_keyboard: true,
@@ -397,9 +397,8 @@ export class TelegramBotService {
 
       await this.adService.create(createAdDto, user!.id, session.uploadedFiles);
 
-      await ctx.reply(
-        '✅ آگهی شما با موفقیت ثبت شد و پس از تایید ادمین منتشر خواهد شد.',
-      );
+      // تغییر پیام تایید - حذف "پس از تایید ادمین"
+      await ctx.reply('✅ آگهی شما با موفقیت ثبت و در کانال منتشر شد!');
 
       this.clearUserSession(ctx.from.id);
       await this.showMainMenu(ctx);
@@ -455,25 +454,71 @@ export class TelegramBotService {
 
   async publishAdToChannel(ad: any) {
     const channelId = this.configService.get('TELEGRAM_CHANNEL_ID');
-    if (!channelId) return;
-
-    const message = `
-🆕 آگهی جدید
-
-📝 ${ad.title}
-📄 ${ad.description}
-🏷️ ${ad.category}
-💰 ${ad.price.toLocaleString()} تومان
-📍 ${ad.province}, ${ad.city}
-🖼️ تصاویر: ${ad.images.map((img: any) => img.url).join('\n')}
-
-#${ad.category.replace(/\s+/g, '_')}
-    `;
+    if (!channelId) {
+      console.warn('TELEGRAM_CHANNEL_ID not configured');
+      return;
+    }
 
     try {
-      await this.bot.telegram.sendMessage(channelId, message);
+      // روش 1: ارسال پیام با تصاویر به صورت Media Group
+      if (ad.images && ad.images.length > 0) {
+        // ایجاد media group برای ارسال چندین تصویر همزمان
+        const mediaGroup = ad.images
+          .slice(0, 10)
+          .map((image: any, index: number) => ({
+            type: 'photo' as const,
+            media: image.url,
+            caption: index === 0 ? this.formatAdMessage(ad) : undefined,
+            parse_mode: 'HTML' as const,
+          }));
+
+        const sentMessages = await this.bot.telegram.sendMediaGroup(
+          channelId,
+          mediaGroup,
+        );
+
+        // ذخیره message_id اولین پیام
+        if (sentMessages && sentMessages.length > 0) {
+          ad.telegramMessageId = sentMessages[0].message_id;
+        }
+      } else {
+        // اگر تصویری نداشت، فقط پیام متنی ارسال کن
+        const message = this.formatAdMessage(ad);
+        const sentMessage = await this.bot.telegram.sendMessage(
+          channelId,
+          message,
+          {
+            parse_mode: 'HTML',
+          },
+        );
+
+        if (sentMessage.message_id) {
+          ad.telegramMessageId = sentMessage.message_id;
+        }
+      }
+
+      console.log('Ad published to channel successfully');
     } catch (error) {
       console.error('Error publishing to channel:', error);
+      throw error;
     }
+  }
+
+  private formatAdMessage(ad: any): string {
+    return `
+🆕 <b>آگهی جدید</b>
+
+📝 <b>${ad.title}</b>
+📄 ${ad.description}
+
+🏷️ <b>دسته‌بندی:</b> ${ad.category}
+🔧 <b>وضعیت:</b> ${ad.condition}
+🏭 <b>برند:</b> ${ad.brand}
+💰 <b>قیمت:</b> ${ad.price.toLocaleString()} تومان
+📍 <b>موقعیت:</b> ${ad.province}, ${ad.city}
+
+#${ad.category.replace(/\s+/g, '_')}
+#${ad.brand.replace(/\s+/g, '_')}
+    `.trim();
   }
 }

@@ -2,6 +2,8 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -23,6 +25,8 @@ export class AdService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private s3Service: S3Service,
+    @Inject(forwardRef(() => 'TelegramBotService'))
+    private telegramBotService: any,
   ) {}
 
   async create(
@@ -57,7 +61,7 @@ export class AdService {
     const ad = this.adRepository.create({
       ...createAdDto,
       user: user,
-      status: AdStatus.PENDING,
+      status: AdStatus.APPROVED, // تغییر از PENDING به APPROVED
       expirationDate,
     });
 
@@ -72,7 +76,18 @@ export class AdService {
       await this.userRepository.save(user);
     }
 
-    return this.findOne(savedAd.id);
+    // دریافت آگهی کامل با تصاویر برای انتشار
+    const completeAd = await this.findOne(savedAd.id);
+
+    // انتشار خودکار در کانال تلگرام
+    try {
+      await this.telegramBotService.publishAdToChannel(completeAd);
+    } catch (error) {
+      console.error('Error publishing ad to channel:', error);
+      // در صورت خطا در انتشار، آگهی همچنان تایید شده باقی می‌ماند
+    }
+
+    return completeAd;
   }
 
   async uploadAdImages(
