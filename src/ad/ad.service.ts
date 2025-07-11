@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Ad, AdStatus } from '../ad/ad.entity';
+import { Ad, AdStatus } from './ad.entity';
 import { AdImage } from './ad-image.entity';
 import { User } from 'src/user/user.entity';
 import { CreateAdDto } from './dto/create-ad.dto';
@@ -30,20 +30,17 @@ export class AdService {
     userId: number,
     files?: Express.Multer.File[],
   ): Promise<Ad> {
-    // بررسی وجود کاربر
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('کاربر یافت نشد');
     }
 
-    // بررسی تعداد آگهی‌های رایگان
     if (user.freeAdsCount <= 0 && !user.isPremium) {
       throw new BadRequestException(
         'تعداد آگهی‌های رایگان شما به پایان رسیده است',
       );
     }
 
-    // اعتبارسنجی محتوای آگهی
     const isValid = await this.validateAdContent(
       createAdDto.title,
       createAdDto.description,
@@ -53,21 +50,23 @@ export class AdService {
       throw new BadRequestException('محتوای آگهی مربوط به تجهیزات عکاسی نیست');
     }
 
-    // ایجاد آگهی
+    const expirationDate = createAdDto.expirationDate
+      ? new Date(createAdDto.expirationDate)
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 روز بعد
+
     const ad = this.adRepository.create({
       ...createAdDto,
-      user: user, // Assign the user object directly
-      status: AdStatus.PENDING, // Use enum value
+      user: user,
+      status: AdStatus.PENDING,
+      expirationDate,
     });
 
     const savedAd = await this.adRepository.save(ad);
 
-    // آپلود تصاویر به S3 (در صورت وجود)
     if (files && files.length > 0) {
       await this.uploadAdImages(savedAd.id, files);
     }
 
-    // کاهش تعداد آگهی‌های رایگان (اگر کاربر پرمیوم نباشد)
     if (!user.isPremium) {
       user.freeAdsCount -= 1;
       await this.userRepository.save(user);
@@ -80,59 +79,49 @@ export class AdService {
     adId: number,
     files: Express.Multer.File[],
   ): Promise<AdImage[]> {
-    // بررسی حداکثر 5 عکس
     if (files.length > 5) {
       throw new BadRequestException('حداکثر 5 عکس مجاز است');
     }
 
-    // بررسی وجود آگهی
     const ad = await this.adRepository.findOne({ where: { id: adId } });
     if (!ad) {
       throw new NotFoundException('آگهی یافت نشد');
     }
 
     try {
-      // آپلود فایل‌ها به S3
       const uploadPromises = files.map(async (file, index) => {
-        const s3Url = await this.s3Service.uploadFile(file, 'ads');
+        const fileUrl = await this.s3Service.uploadFile(file, 'ads');
 
-        // استخراج کلید S3 از URL
-        const url = new URL(s3Url);
+        const url = new URL(fileUrl);
         const s3Key = url.pathname.substring(1);
 
         const adImage = this.adImageRepository.create({
-          ad: ad, // Assign the ad object directly
-          url: s3Url,
+          ad, // تنظیم مستقیم موجودیت ad
+          url: fileUrl,
           filename: file.originalname,
           s3Key,
           order: index,
-          size: file.size,
-          mimeType: file.mimetype,
         });
 
         return this.adImageRepository.save(adImage);
       });
 
       const savedImages = await Promise.all(uploadPromises);
-      return savedImages;
+      return savedImages; // حذف flat()
     } catch (error) {
       throw new BadRequestException('خطا در آپلود تصاویر: ' + error.message);
     }
   }
 
   async deleteAdImages(adId: number): Promise<void> {
-    // دریافت تصاویر آگهی
     const images = await this.adImageRepository.find({
       where: { ad: { id: adId } },
-    }); // Use relation
+    });
 
     if (images.length > 0) {
-      // حذف فایل‌ها از S3
-      const s3Urls = images.map((image) => image.url);
-      await this.s3Service.deleteMultipleFiles(s3Urls);
-
-      // حذف رکوردها از دیتابیس
-      await this.adImageRepository.remove(images); // Use remove for entities
+      const fileUrls = images.map((image) => image.url);
+      await this.s3Service.deleteMultipleFiles(fileUrls);
+      await this.adImageRepository.remove(images);
     }
   }
 
@@ -153,7 +142,7 @@ export class AdService {
       .leftJoinAndSelect('ad.user', 'user')
       .leftJoinAndSelect('ad.images', 'images')
       .orderBy('ad.isFeatured', 'DESC')
-      .addOrderBy('ad.isBoosted', 'DESC') // Corrected property name
+      .addOrderBy('ad.isBoosted', 'DESC')
       .addOrderBy('ad.createdAt', 'DESC');
 
     if (status) {
@@ -204,12 +193,8 @@ export class AdService {
   }
 
   async remove(id: number): Promise<void> {
-    const ad = await this.findOne(id);
-
-    // حذف تصاویر از S3
+    await this.findOne(id);
     await this.deleteAdImages(id);
-
-    // حذف آگهی
     await this.adRepository.delete(id);
   }
 
@@ -230,7 +215,7 @@ export class AdService {
 
   async boost(id: number, duration: number = 3): Promise<Ad> {
     const ad = await this.findOne(id);
-    ad.isBoosted = true; // Corrected property name
+    ad.isBoosted = true;
     ad.boostUntil = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
     await this.adRepository.save(ad);
     return ad;
@@ -238,7 +223,7 @@ export class AdService {
 
   async findByUser(userId: number): Promise<Ad[]> {
     return this.adRepository.find({
-      where: { user: { id: userId } }, // Use relation
+      where: { user: { id: userId } },
       relations: ['images'],
       order: { createdAt: 'DESC' },
     });
@@ -249,7 +234,6 @@ export class AdService {
     description: string,
     category: string,
   ): Promise<boolean> {
-    // کلمات کلیدی مربوط به تجهیزات عکاسی
     const photographyKeywords = [
       'دوربین',
       'لنز',
@@ -282,12 +266,10 @@ export class AdService {
       'تجهیزات جانبی',
     ];
 
-    // بررسی دسته‌بندی
     if (!validCategories.includes(category)) {
       return false;
     }
 
-    // بررسی وجود کلمات کلیدی در عنوان یا توضیحات
     const content = (title + ' ' + description).toLowerCase();
     return photographyKeywords.some((keyword) =>
       content.includes(keyword.toLowerCase()),

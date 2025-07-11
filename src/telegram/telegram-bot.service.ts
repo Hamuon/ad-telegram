@@ -4,6 +4,7 @@ import { Context, Telegraf } from 'telegraf';
 import { UserService } from '../user/user.service';
 import { AdService } from '../ad/ad.service';
 import { SettingService } from '../setting/setting.service';
+import { S3Service } from '../s3/s3.service';
 
 export interface BotContext extends Context {
   session?: any;
@@ -19,6 +20,7 @@ export class TelegramBotService {
     private userService: UserService,
     private adService: AdService,
     private settingService: SettingService,
+    private s3Service: S3Service,
   ) {
     const botToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN') || '';
     this.bot = new Telegraf(botToken);
@@ -164,12 +166,22 @@ export class TelegramBotService {
         const response = await fetch(fileLink.href);
         const buffer = await response.arrayBuffer();
 
-        session.uploadedFiles.push({
+        const file: Express.Multer.File = {
           buffer: Buffer.from(buffer),
           originalname: `${fileId}.jpg`,
           mimetype: 'image/jpeg',
-          size: photo.file_size,
-        });
+          size: photo.file_size ?? 0,
+          fieldname: 'images',
+          encoding: '7bit',
+          destination: '',
+          filename: `${fileId}.jpg`,
+          path: '',
+          stream: null as any,
+        };
+
+        // آپلود فایل به Filebase
+        await this.s3Service.uploadFile(file, 'ads');
+        session.uploadedFiles.push(file);
 
         await ctx.reply(
           `عکس ${session.uploadedFiles.length} دریافت شد. برای ادامه "تمام" را بفرستید یا عکس بیشتری ارسال کنید.`,
@@ -351,7 +363,6 @@ export class TelegramBotService {
     try {
       const user = await this.userService.findByTelegramId(telegramId);
 
-      // اعتبارسنجی محتوای آگهی
       const isValid = await this.adService.validateAdContent(
         session.adData.title,
         session.adData.description,
@@ -367,7 +378,6 @@ export class TelegramBotService {
         return;
       }
 
-      // ایجاد آگهی
       const createAdDto = {
         title: session.adData.title,
         description: session.adData.description,
@@ -380,17 +390,12 @@ export class TelegramBotService {
         latitude: session.adData.latitude,
         longitude: session.adData.longitude,
         userId: user!.id,
+        expirationDate: new Date(
+          Date.now() + 30 * 24 * 60 * 60 * 1000,
+        ).toISOString(), // تنظیم پیش‌فرض
       };
 
-      const ad = await this.adService.create(createAdDto, user!.id);
-
-      // آپلود تصاویر
-      if (session.uploadedFiles && session.uploadedFiles.length > 0) {
-        await this.adService.uploadAdImages(ad.id, session.uploadedFiles);
-      }
-
-      // کاهش تعداد آگهی‌های رایگان
-      await this.userService.decrementFreeAdsCount(user!.id);
+      await this.adService.create(createAdDto, user!.id, session.uploadedFiles);
 
       await ctx.reply(
         '✅ آگهی شما با موفقیت ثبت شد و پس از تایید ادمین منتشر خواهد شد.',
@@ -460,6 +465,7 @@ export class TelegramBotService {
 🏷️ ${ad.category}
 💰 ${ad.price.toLocaleString()} تومان
 📍 ${ad.province}, ${ad.city}
+🖼️ تصاویر: ${ad.images.map((img: any) => img.url).join('\n')}
 
 #${ad.category.replace(/\s+/g, '_')}
     `;

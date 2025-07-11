@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AdController } from './ad.controller';
 import { AdService } from './ad.service';
+import { AdController } from './ad.controller';
 import { Ad } from './ad.entity';
 import { AdImage } from './ad-image.entity';
 import { User } from 'src/user/user.entity';

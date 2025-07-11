@@ -22,10 +22,17 @@ export class S3Service {
       'AWS_SECRET_ACCESS_KEY',
     );
     const bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME');
+    const endpoint = this.configService.get<string>('AWS_S3_ENDPOINT');
 
-    if (!region || !accessKeyId || !secretAccessKey || !bucketName) {
+    if (
+      !region ||
+      !accessKeyId ||
+      !secretAccessKey ||
+      !bucketName ||
+      !endpoint
+    ) {
       throw new Error(
-        'AWS S3 configuration is incomplete. Please check your .env file.',
+        'Filebase configuration is incomplete. Please check your .env file.',
       );
     }
 
@@ -35,16 +42,11 @@ export class S3Service {
         accessKeyId: accessKeyId,
         secretAccessKey: secretAccessKey,
       },
+      endpoint: endpoint, // تنظیم endpoint برای Filebase
     });
     this.bucketName = bucketName;
   }
 
-  /**
-   * آپلود فایل به S3
-   * @param file فایل برای آپلود
-   * @param folder پوشه مقصد در S3
-   * @returns URL فایل آپلود شده
-   */
   async uploadFile(
     file: Express.Multer.File,
     folder: string = 'ads',
@@ -60,52 +62,45 @@ export class S3Service {
           Key: fileName,
           Body: file.buffer,
           ContentType: file.mimetype,
-          ACL: 'public-read',
+          ACL: 'public-read', // دسترسی عمومی برای مشاهده فایل‌ها
         },
       });
 
       const result = await upload.done();
-      const fileUrl = `https://${this.bucketName}.s3.${this.configService.get('AWS_S3_REGION')}.amazonaws.com/${fileName}`;
+      // URL فایل در Filebase
+      const fileUrl = `https://${this.bucketName}.filebase.com/${fileName}`;
 
       this.logger.log(`File uploaded successfully: ${fileUrl}`);
       return fileUrl;
     } catch (error) {
-      this.logger.error('Error uploading file to S3:', error);
-      throw new Error('Failed to upload file to S3');
+      this.logger.error('Error uploading file to Filebase:', error);
+      throw new Error('Failed to upload file to Filebase');
     }
   }
 
-  /**
-   * آپلود چندین فایل به S3
-   * @param files آرایه فایل‌ها برای آپلود
-   * @param folder پوشه مقصد در S3
-   * @returns آرایه URL های فایل‌های آپلود شده
-   */
   async uploadMultipleFiles(
     files: Express.Multer.File[],
     folder: string = 'ads',
   ): Promise<string[]> {
     try {
+      if (files.length > 5) {
+        throw new Error('Maximum 5 files allowed');
+      }
       const uploadPromises = files.map((file) => this.uploadFile(file, folder));
       const urls = await Promise.all(uploadPromises);
 
       this.logger.log(`${files.length} files uploaded successfully`);
       return urls;
     } catch (error) {
-      this.logger.error('Error uploading multiple files to S3:', error);
-      throw new Error('Failed to upload files to S3');
+      this.logger.error('Error uploading multiple files to Filebase:', error);
+      throw new Error('Failed to upload files to Filebase');
     }
   }
 
-  /**
-   * حذف فایل از S3
-   * @param fileUrl URL فایل برای حذف
-   */
   async deleteFile(fileUrl: string): Promise<void> {
     try {
-      // استخراج key از URL
       const url = new URL(fileUrl);
-      const key = url.pathname.substring(1); // حذف / از ابتدا
+      const key = url.pathname.substring(1);
 
       const command = new DeleteObjectCommand({
         Bucket: this.bucketName,
@@ -115,15 +110,11 @@ export class S3Service {
       await this.s3Client.send(command);
       this.logger.log(`File deleted successfully: ${fileUrl}`);
     } catch (error) {
-      this.logger.error('Error deleting file from S3:', error);
-      throw new Error('Failed to delete file from S3');
+      this.logger.error('Error deleting file from Filebase:', error);
+      throw new Error('Failed to delete file from Filebase');
     }
   }
 
-  /**
-   * حذف چندین فایل از S3
-   * @param fileUrls آرایه URL های فایل‌ها برای حذف
-   */
   async deleteMultipleFiles(fileUrls: string[]): Promise<void> {
     try {
       const deletePromises = fileUrls.map((url) => this.deleteFile(url));
@@ -131,17 +122,11 @@ export class S3Service {
 
       this.logger.log(`${fileUrls.length} files deleted successfully`);
     } catch (error) {
-      this.logger.error('Error deleting multiple files from S3:', error);
-      throw new Error('Failed to delete files from S3');
+      this.logger.error('Error deleting multiple files from Filebase:', error);
+      throw new Error('Failed to delete files from Filebase');
     }
   }
 
-  /**
-   * دریافت URL امضا شده برای دسترسی موقت به فایل
-   * @param fileUrl URL فایل
-   * @param expiresIn مدت زمان انقضا به ثانیه (پیش‌فرض: 1 ساعت)
-   * @returns URL امضا شده
-   */
   async getSignedUrl(
     fileUrl: string,
     expiresIn: number = 3600,
@@ -155,8 +140,7 @@ export class S3Service {
         Key: key,
       });
 
-      // برای URL امضا شده باید از getSignedUrl استفاده کرد
-      // اما در اینجا فایل‌ها public هستند پس همان URL اصلی را برمی‌گردانیم
+      // فایل‌های Filebase عمومی هستند، بنابراین URL اصلی را برمی‌گردانیم
       return fileUrl;
     } catch (error) {
       this.logger.error('Error generating signed URL:', error);
@@ -164,11 +148,6 @@ export class S3Service {
     }
   }
 
-  /**
-   * بررسی وجود فایل در S3
-   * @param fileUrl URL فایل
-   * @returns true اگر فایل وجود داشته باشد
-   */
   async fileExists(fileUrl: string): Promise<boolean> {
     try {
       const url = new URL(fileUrl);
@@ -190,11 +169,6 @@ export class S3Service {
     }
   }
 
-  /**
-   * دریافت اطلاعات فایل از S3
-   * @param fileUrl URL فایل
-   * @returns اطلاعات فایل
-   */
   async getFileInfo(fileUrl: string): Promise<any> {
     try {
       const url = new URL(fileUrl);

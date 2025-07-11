@@ -58,25 +58,25 @@ export class PaymentController {
     return this.paymentService.findByUserId(req.user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post('initiate')
-  async initiatePayment(
-    @Body() initiatePaymentDto: InitiatePaymentDto,
-    @Request() req,
-  ) {
-    const payment = await this.paymentService.initiatePayment(
-      req.user.id,
-      initiatePaymentDto.type,
-      initiatePaymentDto.adId,
-    );
+  // @UseGuards(JwtAuthGuard)
+  // @Post('initiate')
+  // async initiatePayment(
+  //   @Body() initiatePaymentDto: InitiatePaymentDto,
+  //   @Request() req,
+  // ) {
+  //   const payment = await this.paymentService.initiatePayment(
+  //     req.user.id,
+  //     initiatePaymentDto.type,
+  //     initiatePaymentDto.adId,
+  //   );
 
-    const paymentUrl = await this.paymentService.generatePaymentUrl(payment.id);
+  //   const paymentUrl = await this.paymentService.generatePaymentUrl(payment.id);
 
-    return {
-      payment,
-      paymentUrl,
-    };
-  }
+  //   return {
+  //     payment,
+  //     paymentUrl,
+  //   };
+  // }
 
   @Post(':id/process')
   processPayment(
@@ -98,41 +98,41 @@ export class PaymentController {
     return this.paymentService.failPayment(id, body.gatewayResponse);
   }
 
-  @Post(':id/verify')
-  verifyPayment(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() verifyPaymentDto: VerifyPaymentDto,
-  ) {
-    return this.paymentService.verifyPayment(id, verifyPaymentDto.authority);
-  }
+  // @Post(':id/verify')
+  // verifyPayment(
+  //   @Param('id', ParseIntPipe) id: number,
+  //   @Body() verifyPaymentDto: VerifyPaymentDto,
+  // ) {
+  //   return this.paymentService.verifyPayment(id, verifyPaymentDto.authority);
+  // }
 
-  @Get(':id/url')
-  async getPaymentUrl(@Param('id', ParseIntPipe) id: number) {
-    const paymentUrl = await this.paymentService.generatePaymentUrl(id);
-    return { paymentUrl };
-  }
+  // @Get(':id/url')
+  // async getPaymentUrl(@Param('id', ParseIntPipe) id: number) {
+  //   const paymentUrl = await this.paymentService.generatePaymentUrl(id);
+  //   return { paymentUrl };
+  // }
 
   // Webhook endpoint for payment gateway callbacks
-  @Post('webhook')
-  async handleWebhook(@Body() webhookData: any, @Query() query: any) {
-    // This would handle payment gateway webhooks
-    // Implementation depends on the specific payment gateway being used
-    console.log('Payment webhook received:', webhookData, query);
+  // @Post('webhook')
+  // async handleWebhook(@Body() webhookData: any, @Query() query: any) {
+  //   // This would handle payment gateway webhooks
+  //   // Implementation depends on the specific payment gateway being used
+  //   console.log('Payment webhook received:', webhookData, query);
 
-    // Example implementation for a generic webhook
-    if (webhookData.status === 'success' && webhookData.paymentId) {
-      await this.paymentService.processPayment(
-        webhookData.paymentId,
-        webhookData.transactionId,
-        JSON.stringify(webhookData),
-      );
-    } else if (webhookData.status === 'failed' && webhookData.paymentId) {
-      await this.paymentService.failPayment(
-        webhookData.paymentId,
-        JSON.stringify(webhookData),
-      );
-    }
+  //   // Example implementation for a generic webhook
+  //   if (webhookData.status === 'success' && webhookData.paymentId) {
+  //     await this.paymentService.processPayment(
+  //       webhookData.paymentId,
+  //       webhookData.transactionId,
+  //       JSON.stringify(webhookData),
+  //     );
+  //   } else if (webhookData.status === 'failed' && webhookData.paymentId) {
+  //     await this.paymentService.failPayment(
+  //       webhookData.paymentId,
+  //       JSON.stringify(webhookData),
+  //     );
+  //   }
 
-    return { status: 'ok' };
-  }
+  //   return { status: 'ok' };
+  // }
 }

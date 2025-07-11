@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { MulterModule } from '@nestjs/platform-express';
@@ -12,6 +12,9 @@ import { SettingModule } from './setting/setting.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { PaymentModule } from './payment/payment.module';
 import { S3Module } from './s3/s3.module';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { User } from './user/user.entity';
 import { Ad } from './ad/ad.entity';
 import { AdImage } from './ad/ad-image.entity';
@@ -49,12 +52,24 @@ import { Setting } from './setting/setting.entity';
       })(),
     }),
 
-    // Multer Module for file uploads
-    MulterModule.register({
-      dest: './uploads',
+    MulterModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        storage: diskStorage({
+          destination: configService.get<string>('UPLOAD_PATH') || './uploads',
+          filename: (req, file, callback) => {
+            const fileExtension = extname(file.originalname);
+            const fileName = `${uuidv4()}${fileExtension}`;
+            callback(null, fileName);
+          },
+        }),
+        limits: {
+          fileSize: configService.get<number>('MAX_FILE_SIZE') || 5242880, // 5MB
+        },
+      }),
+      inject: [ConfigService],
     }),
 
-    // Application Modules
     UserModule,
     AuthModule,
     AdModule,
