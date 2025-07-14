@@ -5,6 +5,20 @@ import { UserService } from '../user/user.service';
 import { AdService } from '../ad/ad.service';
 import { SettingService } from '../setting/setting.service';
 import { S3Service } from '../s3/s3.service';
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface City {
+  cityId: string;
+  provinceName: string;
+  cityName: string;
+  provinceId: string;
+}
+
+interface Province {
+  provinceId: string;
+  provinceName: string;
+}
 
 export interface BotContext extends Context {
   session?: any;
@@ -14,6 +28,7 @@ export interface BotContext extends Context {
 export class TelegramBotService {
   private bot: Telegraf<BotContext>;
   private userSessions = new Map<number, any>();
+  private provincesAndCities: City[] = [];
 
   constructor(
     private configService: ConfigService,
@@ -24,6 +39,53 @@ export class TelegramBotService {
   ) {
     const botToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN') || '';
     this.bot = new Telegraf(botToken);
+    this.loadProvincesAndCities();
+  }
+
+  private loadProvincesAndCities() {
+    try {
+      const filePath = path.join(
+        process.cwd(),
+        'data',
+        'provinces_cities.json',
+      );
+      const data = fs.readFileSync(filePath, 'utf8');
+      this.provincesAndCities = JSON.parse(data);
+      console.log('Provinces and cities data loaded successfully.');
+    } catch (error) {
+      console.error('Error loading provinces and cities data:', error);
+    }
+  }
+
+  getProvinces(): Province[] {
+    const provincesMap = new Map<string, string>();
+    this.provincesAndCities.forEach((item) => {
+      provincesMap.set(item.provinceId, item.provinceName);
+    });
+    return Array.from(provincesMap.entries()).map(([id, name]) => ({
+      provinceId: id,
+      provinceName: name,
+    }));
+  }
+
+  getCitiesByProvinceId(provinceId: string): City[] {
+    return this.provincesAndCities.filter(
+      (item) => item.provinceId === provinceId,
+    );
+  }
+
+  getProvinceNameById(provinceId: string): string | undefined {
+    const province = this.getProvinces().find(
+      (p) => p.provinceId === provinceId,
+    );
+    return province ? province.provinceName : undefined;
+  }
+
+  getCityNameById(cityId: string, provinceId: string): string | undefined {
+    const city = this.provincesAndCities.find(
+      (item) => item.cityId === cityId && item.provinceId === provinceId,
+    );
+    return city ? city.cityName : undefined;
   }
 
   async sendWelcomeMessage(ctx: BotContext) {
@@ -248,37 +310,87 @@ export class TelegramBotService {
     await ctx.reply('وضعیت محصول را انتخاب کنید:', { reply_markup: keyboard });
   }
 
+  async showBrandSelection(ctx: BotContext) {
+    const keyboard = {
+      keyboard: [
+        [{ text: 'Canon' }, { text: 'Nikon' }],
+        [{ text: 'Fujifilm' }, { text: 'Sony' }],
+        [{ text: 'دیگر' }],
+        [{ text: '🔙 بازگشت به منوی اصلی' }],
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+    };
+
+    await ctx.reply('برند محصول را انتخاب کنید:', { reply_markup: keyboard });
+  }
+
   async handleAdCondition(ctx: BotContext, condition: string) {
     if (!ctx.from) return;
     const session = this.getUserSession(ctx.from.id);
     session.adData.condition = condition;
     session.step = 'waiting_brand';
 
-    await ctx.reply('برند محصول را وارد کنید:');
+    await this.showBrandSelection(ctx);
   }
 
   async handleAdBrand(ctx: BotContext, brand: string) {
     if (!ctx.from) return;
     const session = this.getUserSession(ctx.from.id);
     session.adData.brand = brand;
-    session.step = 'waiting_province';
+    session.step = 'waiting_province_selection';
 
-    await ctx.reply('استان خود را وارد کنید:');
+    await this.showProvinceSelection(ctx);
   }
 
-  async handleAdProvince(ctx: BotContext, province: string) {
-    if (!ctx.from) return;
-    const session = this.getUserSession(ctx.from.id);
-    session.adData.province = province;
-    session.step = 'waiting_city';
-
-    await ctx.reply('شهر خود را وارد کنید:');
+  async showProvinceSelection(ctx: BotContext) {
+    const provinces = this.getProvinces();
+    const keyboard = {
+      inline_keyboard: provinces.map((p) => [
+        { text: p.provinceName, callback_data: p.provinceId },
+      ]),
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    };
+    await ctx.reply('استان خود را انتخاب کنید:', { reply_markup: keyboard });
   }
 
-  async handleAdCity(ctx: BotContext, city: string) {
+  async handleProvinceSelection(ctx: BotContext, provinceId: string) {
     if (!ctx.from) return;
     const session = this.getUserSession(ctx.from.id);
-    session.adData.city = city;
+    const provinceName = this.getProvinceNameById(provinceId);
+    if (!provinceName) {
+      await ctx.reply('استان نامعتبر است. لطفاً دوباره انتخاب کنید.');
+      return;
+    }
+    session.adData.provinceId = provinceId;
+    session.adData.province = provinceName;
+    session.step = 'waiting_city_selection';
+    await this.showCitySelection(ctx, provinceId);
+  }
+
+  async showCitySelection(ctx: BotContext, provinceId: string) {
+    const cities = this.getCitiesByProvinceId(provinceId);
+    const keyboard = {
+      inline_keyboard: cities.map((c) => [
+        { text: c.cityName, callback_data: c.cityId },
+      ]),
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    };
+    await ctx.reply('شهر خود را انتخاب کنید:', { reply_markup: keyboard });
+  }
+
+  async handleCitySelection(ctx: BotContext, cityId: string) {
+    if (!ctx.from) return;
+    const session = this.getUserSession(ctx.from.id);
+    const cityName = this.getCityNameById(cityId, session.adData.provinceId);
+    if (!cityName) {
+      await ctx.reply('شهر نامعتبر است. لطفاً دوباره انتخاب کنید.');
+      return;
+    }
+    session.adData.cityId = cityId;
+    session.adData.city = cityName;
     session.step = 'waiting_location';
 
     const keyboard = {
@@ -390,6 +502,8 @@ export class TelegramBotService {
         price: session.adData.price,
         province: session.adData.province,
         city: session.adData.city,
+        provinceId: session.adData.provinceId,
+        cityId: session.adData.cityId,
         latitude: session.adData.latitude,
         longitude: session.adData.longitude,
         userId: user!.id,
@@ -482,7 +596,7 @@ export class TelegramBotService {
         console.log(
           'Media group URLs sent to Telegram:',
           mediaGroup.map((item) => item.media),
-        ); // Debug log
+        );
 
         const sentMessages = await this.bot.telegram.sendMediaGroup(
           channelId,
@@ -515,6 +629,13 @@ export class TelegramBotService {
   }
 
   private formatAdMessage(ad: any): string {
+    const provinceName = ad.provinceId
+      ? this.getProvinceNameById(ad.provinceId)
+      : ad.province;
+    const cityName =
+      ad.cityId && ad.provinceId
+        ? this.getCityNameById(ad.cityId, ad.provinceId)
+        : ad.city;
     return `
 🆕 <b>آگهی جدید</b>
 
@@ -524,11 +645,11 @@ export class TelegramBotService {
 🏷️ <b>دسته‌بندی:</b> ${ad.category}
 🔧 <b>وضعیت:</b> ${ad.condition}
 🏭 <b>برند:</b> ${ad.brand}
-💰 <b>قیمت:</b> ${ad.price.toLocaleString()} تومان
-📍 <b>موقعیت:</b> ${ad.province}, ${ad.city}
+💰 <b>قیمت:</b> ${ad.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} تومان
+📍 <b>موقعیت:</b> ${provinceName}, ${cityName}
 
 #${ad.category.replace(/\s+/g, '_')}
-#${ad.brand.replace(/\s+/g, '_')}
+#${ad.brand}
     `.trim();
   }
 }

@@ -65,10 +65,29 @@ export class S3Service {
       });
 
       const result = await upload.done();
-      // Log the result to inspect CID
-      this.logger.log('Upload result:', JSON.stringify(result));
-      // Verify with Filebase API docs how CID is returned
-      const cid = result.$metadata.extendedRequestId;
+      let cid: string;
+      if (result.Location && result.Location.includes(this.filebaseGateway)) {
+        cid = result.Location?.split('/').pop() ?? '';
+        if (!cid) {
+          throw new Error(
+            'Could not extract CID from Filebase upload location.',
+          );
+        }
+      } else {
+        const headObjectCommand = new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: fileName,
+        });
+        const headResult = await this.s3Client.send(headObjectCommand);
+        cid = headResult.Metadata ? (headResult.Metadata['cid'] ?? '') : '';
+        if (!cid) {
+          this.logger.warn(
+            'CID not found in x-amz-meta-cid header. Checking for other potential locations.',
+          );
+          throw new Error('Could not retrieve CID from Filebase upload.');
+        }
+      }
+
       const fileUrl = `${this.filebaseGateway}${cid}`;
 
       this.logger.log(`File uploaded successfully: ${fileUrl}`);
@@ -130,7 +149,7 @@ export class S3Service {
     expiresIn: number = 3600,
   ): Promise<string> {
     try {
-      return fileUrl; // Filebase URLs are public
+      return fileUrl;
     } catch (error) {
       this.logger.error('Error generating signed URL:', error);
       throw new Error('Failed to generate signed URL');

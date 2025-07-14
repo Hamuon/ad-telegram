@@ -118,12 +118,10 @@ export class AdService {
         let filename: string;
 
         if ('url' in item) {
-          // Handle Telegram-uploaded images with pre-existing URLs
           fileUrl = item.url;
           s3Key = new URL(fileUrl).pathname.replace('/ipfs/', '');
           filename = item.filename;
         } else {
-          // Handle API-uploaded files
           fileUrl = await this.s3Service.uploadFile(item);
           s3Key = new URL(fileUrl).pathname.replace('/ipfs/', '');
           filename = item.filename;
@@ -141,7 +139,7 @@ export class AdService {
       });
 
       const savedImages = (await Promise.all(uploadPromises)).flat();
-      console.log('Saved images:', savedImages); // Debug log
+      console.log('Saved images:', savedImages);
       return savedImages;
     } catch (error) {
       console.error('Error in uploadAdImages:', error);

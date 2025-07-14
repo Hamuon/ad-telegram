@@ -78,6 +78,19 @@ export class TelegramBotUpdate {
     }
   }
 
+  @Hears(['Canon', 'Nikon', 'Fujifilm', 'Sony', 'دیگر'])
+  async onBrandSelection(@Context() ctx: BotContext) {
+    if (!ctx.from) return;
+    const session = this.telegramBotService.getUserSession(ctx.from.id);
+    if (
+      session.step === 'waiting_brand' &&
+      ctx.message &&
+      'text' in ctx.message
+    ) {
+      await this.telegramBotService.handleAdBrand(ctx, ctx.message.text);
+    }
+  }
+
   @Hears('تمام')
   async onImagesComplete(@Context() ctx: BotContext) {
     if (!ctx.from) return;
@@ -135,10 +148,28 @@ export class TelegramBotUpdate {
     await ctx.reply(helpMessage);
   }
 
+  @On('callback_query')
+  async onCallbackQuery(@Context() ctx: BotContext) {
+    if (!ctx.from || !ctx.callbackQuery || !('data' in ctx.callbackQuery))
+      return;
+    const session = this.telegramBotService.getUserSession(ctx.from.id);
+    const data = ctx.callbackQuery.data;
+
+    switch (session.step) {
+      case 'waiting_province_selection':
+        await this.telegramBotService.handleProvinceSelection(ctx, data);
+        break;
+      case 'waiting_city_selection':
+        await this.telegramBotService.handleCitySelection(ctx, data);
+        break;
+    }
+    await ctx.answerCbQuery(); // Acknowledge the callback query
+  }
+
   @On('text')
   async onText(@Context() ctx: BotContext) {
     if (!ctx.from || !ctx.message || !('text' in ctx.message)) {
-      return; // Not a text message or no user info
+      return;
     }
     const session = this.telegramBotService.getUserSession(ctx.from.id);
     const text = ctx.message.text;
@@ -150,20 +181,26 @@ export class TelegramBotUpdate {
       case 'waiting_description':
         await this.telegramBotService.handleAdDescription(ctx, text);
         break;
-      case 'waiting_brand':
-        await this.telegramBotService.handleAdBrand(ctx, text);
-        break;
-      case 'waiting_province':
-        await this.telegramBotService.handleAdProvince(ctx, text);
-        break;
-      case 'waiting_city':
-        await this.telegramBotService.handleAdCity(ctx, text);
-        break;
       case 'waiting_price':
         await this.telegramBotService.handleAdPrice(ctx, text);
         break;
+      case 'waiting_province_selection': {
+        const provinces = this.telegramBotService.getProvinces();
+        const province = provinces.find((p) => p.provinceName === text);
+        if (province) {
+          await this.telegramBotService.handleProvinceSelection(
+            ctx,
+            province.provinceId,
+          );
+        } else {
+          await ctx.reply(
+            'استان نامعتبر است. لطفاً از دکمه‌های زیر انتخاب کنید:',
+          );
+          await this.telegramBotService.showProvinceSelection(ctx);
+        }
+        break;
+      }
       default:
-        // Handle unknown commands
         await ctx.reply('دستور نامشخص. لطفاً از منوی اصلی استفاده کنید.');
         await this.telegramBotService.showMainMenu(ctx);
         break;
